@@ -53,6 +53,15 @@ function localDate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
 
+function generatorLabel(generator: string) {
+  switch (generator) {
+    case "deterministic": return "cálculo local";
+    case "deterministic-refresh": return "recálculo local";
+    case "workers_ai": return "sugestão da IA";
+    default: return generator;
+  }
+}
+
 function geographicPoints(orders: Order[]) {
   const located = orders.filter((order): order is Order & { latitude: number; longitude: number } => order.latitude !== null && order.longitude !== null);
   if (located.length === 0) return [];
@@ -337,7 +346,7 @@ function PlanningPanel({ proposal, teams, date, loading, onDateChange, onCreate,
     </div>
     {loading ? <div className="planning-empty">Carregando planejamento…</div> : !proposal ? <div className="planning-empty"><Icon name="calendar" /><strong>Nenhuma proposta para este dia</strong><span>O agrupamento usa distância em metros e mantém ordens sem posição como pendências.</span><button className="button primary" onClick={onCreate}>Gerar proposta</button></div> : <>
       <div className="planning-toolbar">
-        <div><span className={`proposal-status ${proposal.status}`}>{proposal.status === "draft" ? "Rascunho" : proposal.status === "approved" ? "Aprovada" : "Conflito"}</span><small>versão {proposal.version} · {proposal.generator === "deterministic" ? "cálculo local" : proposal.generator}</small></div>
+        <div><span className={`proposal-status ${proposal.status}`}>{proposal.status === "draft" ? "Rascunho" : proposal.status === "approved" ? "Aprovada" : "Conflito"}</span><small>versão {proposal.version} · {generatorLabel(proposal.generator)}</small></div>
         <label>Equipe<select value={proposal.team_id ?? ""} disabled={!editable} onChange={(event) => onChange({ ...proposal, team_id: event.target.value || null })}><option value="">Selecione</option>{teams.map((team) => <option value={team.id} key={team.id}>{team.name}</option>)}</select></label>
         <label>Agenda responsável<select value={proposal.agenda_responsible_id ?? ""} disabled={!editable} onChange={(event) => onChange({ ...proposal, agenda_responsible_id: event.target.value || null })}><option value="">Selecione</option>{allTechnicians.map((member) => <option value={member.id} key={member.id}>{member.name}</option>)}</select></label>
         {(proposal.status === "draft" || proposal.status === "conflicted") && <button className="button" onClick={refresh}><Icon name="refresh" /> Recalcular</button>}

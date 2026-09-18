@@ -16,7 +16,7 @@ Painel pessoal para consultar, organizar e planejar ordens de serviço do MK Sol
 - correção manual versionada de coordenadas e visualização geográfica local;
 - prévia de agendamento com revalidação e bloqueios, sem criar comandos;
 - listagem paginada e busca executada no banco;
-- cliente Workers AI com saída estruturada e validação local, ainda não acionado pelo painel;
+- cliente Workers AI com saída estruturada e validação local, já conectado à criação e ao recálculo de propostas (opcional; sem configuração, ou em qualquer falha, o agrupamento determinístico calculado pelo sistema é usado);
 - modo real bloqueado de forma legível enquanto faltarem contratos do MK.
 
 Um mapa viário com provedor definido, IA e envio/reconciliação real fazem parte dos marcos seguintes. As pendências externas estão em [docs/integracao-mk.md](docs/integracao-mk.md).
@@ -79,6 +79,12 @@ O teste integrado usa somente PostgreSQL/PostGIS e o simulador, cria um projeto 
 
 ```bash
 ./scripts/integration-test.sh
+```
+
+Os testes de concorrência de `backend/internal/store` e `backend/internal/sync` (reserva de tarefas, expiração de lease, sincronização repetida) exigem `TEST_DATABASE_URL` e são pulados por um `go test ./...` comum. Para executá-los contra um PostgreSQL/PostGIS descartável:
+
+```bash
+./scripts/postgres-tests.sh
 ```
 
 ## Segurança operacional

@@ -18,6 +18,7 @@ type Config struct {
 	CloudflareAccountID string
 	CloudflareAPIToken  string
 	CloudflareAIModel   string
+	CloudflareAITimeout time.Duration
 }
 
 func Load() (Config, error) {
@@ -35,6 +36,10 @@ func Load() (Config, error) {
 	if err != nil || pollInterval < 250*time.Millisecond {
 		return Config{}, errors.New("WORKER_POLL_INTERVAL deve ser uma duração de pelo menos 250ms")
 	}
+	aiTimeout, err := time.ParseDuration(getenv("CLOUDFLARE_AI_TIMEOUT", "8s"))
+	if err != nil || aiTimeout < time.Second {
+		return Config{}, errors.New("CLOUDFLARE_AI_TIMEOUT deve ser uma duração de pelo menos 1s")
+	}
 
 	cfg := Config{
 		Mode:                getenv("APP_MODE", "simulation"),
@@ -47,6 +52,7 @@ func Load() (Config, error) {
 		CloudflareAccountID: os.Getenv("CLOUDFLARE_ACCOUNT_ID"),
 		CloudflareAPIToken:  os.Getenv("CLOUDFLARE_API_TOKEN"),
 		CloudflareAIModel:   os.Getenv("CLOUDFLARE_AI_MODEL"),
+		CloudflareAITimeout: aiTimeout,
 	}
 	if cfg.Mode != "simulation" && cfg.Mode != "real" {
 		return Config{}, errors.New("APP_MODE deve ser simulation ou real")

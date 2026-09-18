@@ -61,7 +61,7 @@ func TestProtectedRouteAcceptsToken(t *testing.T) {
 }
 
 func TestEveryAPIRouteRequiresAuthentication(t *testing.T) {
-	handler := New(nil, "simulation", "123456789012345678901234", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler := New(nil, "simulation", "123456789012345678901234", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	requests := []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/dashboard"},
 		{http.MethodGet, "/api/v1/orders"},

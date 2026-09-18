@@ -12,6 +12,7 @@ import (
 
 	"agendaos/internal/config"
 	"agendaos/internal/httpapi"
+	"agendaos/internal/llm"
 	"agendaos/internal/store"
 )
 
@@ -36,9 +37,23 @@ func main() {
 	}
 	defer dataStore.Pool.Close()
 
+	// Workers AI stays optional: cfg.ValidateAPI already rejected a partial
+	// configuration, so either all three fields are set or none are. Without
+	// them, the panel keeps using the deterministic grouping on its own.
+	var suggester store.GroupingSuggester
+	if cfg.CloudflareAccountID != "" {
+		client, err := llm.New(cfg.CloudflareAccountID, cfg.CloudflareAPIToken, cfg.CloudflareAIModel, &http.Client{Timeout: cfg.CloudflareAITimeout})
+		if err != nil {
+			logger.Error("configuração Workers AI inválida", "error", err)
+			os.Exit(1)
+		}
+		suggester = client
+		logger.Info("agrupamento por Workers AI habilitado", "model", client.Model())
+	}
+
 	server := &http.Server{
 		Addr:              cfg.APIAddr,
-		Handler:           httpapi.New(dataStore, cfg.Mode, cfg.APIToken, logger),
+		Handler:           httpapi.New(dataStore, cfg.Mode, cfg.APIToken, suggester, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

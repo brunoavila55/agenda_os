@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -17,14 +18,19 @@ import (
 )
 
 type Server struct {
-	store    *store.Store
-	mode     string
-	apiToken string
-	logger   *slog.Logger
+	store     *store.Store
+	mode      string
+	apiToken  string
+	suggester store.GroupingSuggester
+	logger    *slog.Logger
 }
 
-func New(dataStore *store.Store, mode, apiToken string, logger *slog.Logger) http.Handler {
-	server := &Server{store: dataStore, mode: mode, apiToken: apiToken, logger: logger}
+// New wires the panel API. suggester may be nil — Workers AI is optional and
+// unconfigured by default (AGENTS.md §17); every planning route works with a
+// nil suggester exactly as it did before Workers AI was connected, since it
+// only ever falls back to the deterministic grouping already in place.
+func New(dataStore *store.Store, mode, apiToken string, suggester store.GroupingSuggester, logger *slog.Logger) http.Handler {
+	server := &Server{store: dataStore, mode: mode, apiToken: apiToken, suggester: suggester, logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", server.live)
 	mux.HandleFunc("GET /health/ready", server.ready)
@@ -297,11 +303,30 @@ func (s *Server) createProposal(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	if created {
+		proposal = s.withGroupingSuggestion(r.Context(), proposal)
+	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, proposal)
+}
+
+// withGroupingSuggestion asks the configured Workers AI boundary to improve
+// on the deterministic grouping already computed. When AI is not configured,
+// or the attempt fails for any reason, it returns proposal unchanged — the
+// deterministic result is always a complete, usable answer on its own.
+func (s *Server) withGroupingSuggestion(ctx context.Context, proposal *store.Proposal) *store.Proposal {
+	if s.suggester == nil {
+		return proposal
+	}
+	suggested, err := s.store.SuggestGrouping(ctx, proposal.ID, s.mode, s.suggester)
+	if err != nil {
+		s.logger.Error("sugestão de agrupamento", "error", err, "proposal_id", proposal.ID)
+		return proposal
+	}
+	return suggested
 }
 
 type proposalUpdateInput struct {
@@ -368,6 +393,7 @@ func (s *Server) refreshProposal(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, err)
 		return
 	}
+	proposal = s.withGroupingSuggestion(r.Context(), proposal)
 	writeJSON(w, http.StatusOK, proposal)
 }
 
