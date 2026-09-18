@@ -82,8 +82,8 @@ Conferir os contratos e a release instalada antes de implementar chamadas reais.
 
 | Função | Caminho documentado | Situação conhecida |
 | --- | --- | --- |
-| Autenticar | `/mk/WSAutenticacao.rule` | Testado pelo usuário com sucesso |
-| Listar tipos | `/mk/WSMKOSListaTiposOS.rule` | Testado pelo usuário com sucesso |
+| Autenticar | `/mk/WSAutenticacao.rule` | Testado pelo usuário com sucesso; confirmado de novo em 2026-09-18 pelo cliente Go em `backend/internal/mk/client.go` contra `sac.newlifefibra.com.br` |
+| Listar tipos | `/mk/WSMKOSListaTiposOS.rule` | Testado pelo usuário com sucesso; confirmado de novo em 2026-09-18 pelo cliente Go, formato de resposta real igual ao documentado em §6.4 |
 | Listar equipes | `/mk/WSMKOSListaGruposServico.rule` | Documentado; funcionamento não confirmado |
 | Listar técnicos responsáveis | `/mk/WSMKOSListaTecnicoResponsavel.rule` | Documentado; funcionamento não confirmado |
 | Consultar O.S. por ID | `GET /os/id` | API Node; endereço-base não confirmado |
@@ -98,31 +98,49 @@ Não inventar um endpoint de listagem por tipo. Não identificar códigos de tip
 
 A autenticação documentada recebe `sys`, `token`, `password` e `cd_servico`. O token de entrada é a credencial do usuário; o token retornado é utilizado nas consultas seguintes. Não confundir os dois.
 
+`sys` é sempre `"MK0"` — confirmado fixo em duas instalações MK reais e distintas do usuário (não apenas esta). Não expor como variável de ambiente configurável; hardcoded em `backend/internal/mk/client.go`.
+
 O retorno observado contém campos como `Token`, `Expire`, `LimiteUso`, `ServicosAutorizados` e `status`. Não presumir fuso de `Expire` ou semântica de `LimiteUso` sem confirmar. Respeitar perfis com uso único e serviços efetivamente autorizados.
 
-`cd_servico=9999` não concede permissões ausentes no perfil. Não usar esse valor como solução genérica para falhas.
+`cd_servico=9999` não concede permissões ausentes no perfil. Não usar esse valor como solução genérica para falhas. **Confirmado em 2026-09-18**: com `cd_servico=9999`, `ServicosAutorizados` devolveu a lista completa de códigos que o perfil de Webservice pode efetivamente usar — e o token resultante funcionou para `WSMKOSListaTiposOS.rule`. O que determina o que uma chamada pode fazer é essa lista, não o valor de `cd_servico` passado na autenticação em si.
+
+O nome do campo do token retornado varia entre instalações reais do MK (confirmado contra dois sistemas distintos do usuário — `Token` direto em um, aninhado sob outro nome em outro). `backend/internal/mk/client.go` busca recursivamente por `token`/`tokenautenticacao`/`tokenretornoautenticacao` ignorando caixa, em vez de assumir um único nome de campo.
 
 ### 6.4 Tipos de O.S.
 
-Formato observado, com valores abaixo exclusivamente ilustrativos:
+Formato **confirmado contra o MK real em produção em 2026-09-18** (`sac.newlifefibra.com.br`, via `cd_servico=9999`), não mais ilustrativo:
 
 ```json
 {
   "Tipos": [
-    { "codostipo": 123, "descricao": "EXEMPLO" }
-  ]
+    { "codostipo": 93, "descricao": "BAIXA SETOR RURAL" },
+    { "codostipo": 29, "descricao": "INSTALAÇÃO RURAL" }
+  ],
+  "status": "OK"
 }
 ```
 
-O código exato de manutenção rural ainda precisa ser selecionado a partir do catálogo real. Buscar o nome ajuda na configuração inicial; depois persistir o ID. Não usar correspondência textual aproximada para decidir elegibilidade a cada ciclo.
+Devolve o catálogo completo (~130 tipos) numa única chamada, sem paginação. `codostipo` vem como número JSON (não string).
+
+Candidatos identificados no catálogo real com "RURAL" na descrição — falta a escolha final do usuário sobre qual(is) representa(m) a operação de manutenção rural do produto:
+
+| Código | Descrição |
+| --- | --- |
+| 29 | INSTALAÇÃO RURAL |
+| 30 | VISITA TÉCNICA - RURAL |
+| 93 | BAIXA SETOR RURAL |
+| 226 | VISADA + INSTALAÇÃO RURAL |
+| 249 | MANUTENÇÃO RURAL POP |
+
+Buscar o nome ajuda na configuração inicial; depois persistir o ID. Não usar correspondência textual aproximada para decidir elegibilidade a cada ciclo.
 
 O `id` de `/os/id` é o código de uma ordem específica, não `codostipo`.
 
 ### 6.5 Problemas observados
 
 - Dois retornos 500 indicaram violação de `mk_ws_consumo_cd_servico_fkey`: os códigos 38 e 39 não estavam presentes em `mk_ws_servicos`.
-- O erro evidencia falha interna ao registrar o consumo do serviço. A causa de configuração/atualização depende de diagnóstico do suporte MK.
-- A associação de cada erro a seu endpoint ainda não foi confirmada. Não afirmar qual consulta corresponde a 38 ou 39.
+- **Confirmado em 2026-09-18**: os códigos `38` e `39` também não aparecem em `ServicosAutorizados` na resposta de `WSAutenticacao.rule` para este perfil — a causa não é uma falha transitória do MK, é uma permissão que falta no cadastro do perfil de Webservice. Se esses serviços forem realmente necessários, é preciso pedir ao suporte/comercial MK para liberá-los no perfil, não corrigir nada do nosso lado.
+- A associação de cada código a seu endpoint/função de negócio ainda não foi confirmada. Não afirmar qual consulta corresponde a 38 ou 39.
 - Não corrigir o banco interno do MK diretamente nem criar registros de serviço por suposição.
 - A tentativa `/mk//os/id` retornou 404 HTML. Isso não demonstra inexistência da ordem nem indisponibilidade de toda a API Node.
 - Configurar bases independentes para endpoints `.rule` e API Node, se necessário. Não concatenar `/mk/` indiscriminadamente.
