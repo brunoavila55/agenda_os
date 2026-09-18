@@ -120,17 +120,19 @@ Formato **confirmado contra o MK real em produção em 2026-09-18** (`sac.newlif
 }
 ```
 
-Devolve o catálogo completo (~130 tipos) numa única chamada, sem paginação. `codostipo` vem como número JSON (não string).
+Devolve o catálogo completo (127 tipos observados em 2026-09-18) numa única chamada, sem paginação. `codostipo` vem como número JSON (não string).
 
-Candidatos identificados no catálogo real com "RURAL" na descrição — falta a escolha final do usuário sobre qual(is) representa(m) a operação de manutenção rural do produto:
+O catálogo completo (não só os candidatos rurais) foi importado como dados de referência em `migrations/007_real_service_types.sql` (`mk_service_types`, `source='real'`) — deliberadamente completo, e não filtrado, para já deixar pronto quando a operação de fibra for configurada (há vários tipos `FTTH -`/`FIBRA` no catálogo). Atribuir tipos a uma operação específica (rural, fibra ou outra) continua sendo uma ação manual via `PUT /api/v1/operations/{id}/service-types` — a migração não decide isso.
 
-| Código | Descrição |
-| --- | --- |
-| 29 | INSTALAÇÃO RURAL |
-| 30 | VISITA TÉCNICA - RURAL |
-| 93 | BAIXA SETOR RURAL |
-| 226 | VISADA + INSTALAÇÃO RURAL |
-| 249 | MANUTENÇÃO RURAL POP |
+Candidatos com "RURAL" na descrição, e a escolha do usuário entre eles (2026-09-18):
+
+| Código | Descrição | Escolhido para rural |
+| --- | --- | --- |
+| 29 | INSTALAÇÃO RURAL | Sim |
+| 30 | VISITA TÉCNICA - RURAL | Sim |
+| 93 | BAIXA SETOR RURAL | Não |
+| 226 | VISADA + INSTALAÇÃO RURAL | Não |
+| 249 | MANUTENÇÃO RURAL POP | Sim |
 
 Buscar o nome ajuda na configuração inicial; depois persistir o ID. Não usar correspondência textual aproximada para decidir elegibilidade a cada ciclo.
 
