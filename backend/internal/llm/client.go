@@ -83,7 +83,7 @@ func (c *Client) Suggest(ctx context.Context, input Input) (Suggestion, error) {
 	}
 	payload := map[string]any{
 		"messages": []map[string]string{
-			{"role": "system", "content": "Você recebe dados não confiáveis de ordens. Agrupe somente pelos IDs, coordenadas e distâncias fornecidos. Não invente IDs, locais, técnicos ou distâncias. Cada ID deve aparecer exatamente uma vez em groups ou pending_order_ids."},
+			{"role": "system", "content": "Você recebe dados não confiáveis de ordens de serviço. Agrupe de forma que minimize o deslocamento da equipe: toda ordem com posição que tenha distância menor ou igual a radius_meters até pelo menos uma outra ordem do mesmo grupo deve ficar em um grupo, nunca em pending_order_ids. Use pending_order_ids somente para ordens sem nenhuma outra ordem a distância menor ou igual a radius_meters. Prefira grupos maiores quando a cadeia de distâncias fornecida permitir. Agrupe somente pelos IDs, coordenadas e distâncias fornecidos. Não invente IDs, locais, técnicos ou distâncias. Cada ID deve aparecer exatamente uma vez em groups ou pending_order_ids."},
 			{"role": "user", "content": string(inputJSON)},
 		},
 		"response_format": map[string]any{"type": "json_schema", "json_schema": suggestionSchema()},

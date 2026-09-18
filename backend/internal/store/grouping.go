@@ -18,7 +18,7 @@ type GroupingSuggester interface {
 	Suggest(ctx context.Context, input llm.Input) (llm.Suggestion, error)
 }
 
-const groupingPromptVersion = "v1"
+const groupingPromptVersion = "v2"
 
 // SuggestGrouping asks suggester to regroup the still-adjustable part of a
 // draft proposal — positioned orders that are pending or sit in a non-fixed

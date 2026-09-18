@@ -1,6 +1,6 @@
 # Progresso do desenvolvimento
 
-Atualizado em 18 de setembro de 2026.
+Atualizado em 18 de setembro de 2026 (revisão do fim do dia: primeiro teste real do Workers AI).
 
 Este documento registra o que foi confirmado no código atual. Ele não representa validação contra o ERP MK real.
 
@@ -15,7 +15,7 @@ O projeto possui o primeiro marco funcional em modo simulado: frontend autentica
 | 3. Cliente MK e sincronização real | Não iniciada | Não existe adaptador MK; `APP_MODE=real` bloqueia o worker explicitamente |
 | 4. Painel operacional | Parcial avançada | Resumo, lista paginada, busca, detalhes, tipos, sincronização e planejamento diário editável |
 | 5. Localização e grupos calculados | Parcial avançada | Agrupamento em metros, grupos fixados, recálculo, correção manual e visualização por coordenadas; provedor de mapa viário ainda não definido |
-| 6. IA | Conectada ao planejamento | Criação e recálculo de proposta chamam a fronteira de Workers AI com cliente substituível; grupos fixados e propostas aprovadas nunca são tocados; qualquer falha preserva o agrupamento determinístico já calculado; nenhum modelo Cloudflare real foi testado ainda |
+| 6. IA | Testada de ponta a ponta com modelo real | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` escolhido, habilitado em ambiente real e exercitado três vezes contra dados simulados; agrupamento coerente após ajuste do prompt (`v2`); ainda não é uma escolha final de produção |
 | 7. Agendamento | Parcial inicial | Prévia revalida itens e expõe bloqueios; não cria comandos nem chama o MK |
 | 8. Piloto rural | Pendente | Depende da integração real e da validação operacional |
 | 9. Implantação e fibra | Pendente | Depende das etapas anteriores, infraestrutura definida e testes de carga/restauração |
@@ -58,7 +58,9 @@ O projeto possui o primeiro marco funcional em modo simulado: frontend autentica
 - criar e recalcular uma proposta chamam `Store.SuggestGrouping`, que pede uma sugestão ao cliente Workers AI configurado (interface substituível, `nil` por padrão) sobre a parte ainda ajustável da proposta (pendentes e grupos não fixados com posição), valida a resposta de novo no backend independentemente do que o cliente já validou, e só então aplica; grupos fixados e propostas aprovadas nunca entram na chamada;
 - a chamada ao Workers AI nunca ocorre com uma transação de banco aberta: o cálculo determinístico é sempre gravado primeiro, a sugestão é buscada depois, e sua aplicação usa controle de versão otimista — uma edição concorrente durante a chamada faz a sugestão ser descartada em vez de sobrescrever o estado mais novo;
 - falha de rede, resposta inválida ou sugestão descartada por conflito preservam o agrupamento determinístico já calculado e devolvem a proposta normalmente; o painel mostra a origem do agrupamento (`generator`: cálculo local, recálculo local ou sugestão da IA);
-- toda sugestão (validada ou rejeitada) é registrada em `grouping_suggestions` com modelo, versão do prompt, assinatura da entrada e resultado ou erro sanitizado.
+- toda sugestão (validada ou rejeitada) é registrada em `grouping_suggestions` com modelo, versão do prompt, assinatura da entrada e resultado ou erro sanitizado;
+- o modelo `@cf/meta/llama-3.3-70b-instruct-fp8-fast` foi habilitado com credenciais reais da Cloudflare e chamado de ponta a ponta pela primeira vez, pelo fluxo real da API (criação e recálculo de proposta), não apenas por um dublê em teste;
+- o prompt de sistema agora instrui explicitamente o modelo a agrupar toda ordem que tenha ao menos uma outra ordem do mesmo grupo a distância menor ou igual a `radius_meters` (versão `v2`, persistida em `grouping_suggestions.prompt_version`); a versão anterior (`v1`) só proibia invenção de dados e, testada três vezes contra o modelo real, sempre devolveu zero grupos mesmo havendo ordens mutuamente conectadas dentro do raio.
 
 ## Lacunas técnicas prioritárias
 
@@ -88,7 +90,8 @@ O projeto possui o primeiro marco funcional em modo simulado: frontend autentica
 
 ### IA e agendamento
 
-- nenhum modelo Cloudflare real foi escolhido nem testado; a fronteira está conectada mas segue sem uso em produção até isso ser decidido;
+- o modelo real foi testado com sucesso, mas ainda não é uma escolha final de produção; falta decidir custo/quota aceitáveis e comparar com os demais modelos da lista de JSON Mode antes de considerar definitivo;
+- com apenas dois testes de cadeia (pares próximos), não está confirmado se o prompt `v2` também agrupa corretamente cadeias maiores (3+ ordens mutuamente conectadas) em um único grupo maior, em vez de pares menores — vale testar com mais ordens simuladas antes de confiar nisso em produção;
 - avaliar se o painel deve permitir pedir uma nova sugestão sob demanda (hoje ela só é buscada automaticamente ao criar ou recalcular);
 - persistir a aprovação e o comando antes da chamada externa;
 - revalidar cada ordem imediatamente antes do envio;
@@ -108,7 +111,7 @@ O desenvolvimento local pode continuar no simulador, mas a integração real dep
 7. cadastros reais de equipe, técnicos e agenda responsável;
 8. convenção de início/fim do planejamento diário e confirmação do agendamento;
 9. release, permissões, restrição de IP e limites de consumo;
-10. servidor, domínio, fuso, provedor geográfico e modelo Workers AI definitivos.
+10. servidor, domínio, fuso e provedor geográfico definitivos; o modelo Workers AI (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`) já foi testado com sucesso mas ainda não foi formalmente adotado como definitivo.
 
 Detalhes e evidências conhecidas permanecem em [integração MK](integracao-mk.md).
 
@@ -133,18 +136,22 @@ Executadas em 18 de setembro de 2026:
 - um teste inicial de expiração de lease baseado em `time.Sleep` real se mostrou instável sob `-race` (a lease podia vencer antes da verificação seguinte); os testes de lease e de atraso de nova tentativa agora forçam o vencimento via SQL em vez de dependerem de tempo real decorrido;
 - `Store.SuggestGrouping` tem cinco testes contra PostgreSQL/PostGIS real com um cliente Workers AI substituído por um dublê: aplica uma sugestão validada e registra `grouping_suggestions` como `validated`; descarta uma sugestão inválida (ID omitido) e registra como `failed` sem alterar o agrupamento determinístico; nunca envia nem altera o grupo fixado, enviando ao dublê somente a parte ainda ajustável da proposta; nunca chama o dublê quando há menos de duas ordens posicionáveis para regrupar; e descarta uma sugestão válida quando a proposta muda (simulado dentro do próprio dublê) enquanto a chamada estava em andamento, provando que nenhuma transação fica aberta durante essa chamada;
 - imagem Docker completa (`api`, `worker`, `healthcheck`, `migrate`) reconstruída após essas mudanças: compilação aprovada; binário `api` iniciado contra o banco de teste real duas vezes — sem Workers AI configurado e com credenciais fictícias configuradas — em ambos os casos `/health/ready` respondeu corretamente e o segundo caso registrou o log de habilitação esperado;
-- `npm run lint` e `npm run build` executados novamente após a mudança em `dashboard.tsx` (rótulo do `generator` no painel): aprovados.
+- `npm run lint` e `npm run build` executados novamente após a mudança em `dashboard.tsx` (rótulo do `generator` no painel): aprovados;
+- `scripts/postgres-tests.sh` executado literalmente com Docker (Compose real, não mais só o fluxo equivalente via Podman): todos os testes de concorrência de tarefas, sincronização e `SuggestGrouping` aprovados;
+- stack completa levantada com `docker compose up --build` e credenciais reais da Cloudflare no `.env`; log da API confirmou `"agrupamento por Workers AI habilitado"` com o modelo `@cf/meta/llama-3.3-70b-instruct-fp8-fast`;
+- primeira chamada real ao Workers AI pelo fluxo da API (criação de proposta para a operação rural simulada, 4 ordens posicionadas e 1 sem posição): resposta validada e aplicada (`generator: workers_ai`), mas com o prompt original (`v1`) o modelo devolveu zero grupos nas três tentativas (criação + 2 recálculos), mesmo com as 4 ordens mutuamente conectadas dentro do raio de 12km da operação — indicando que o prompt não tinha um objetivo explícito de agrupamento, e não um problema do backend;
+- prompt de sistema ajustado (`v2`, ver `backend/internal/llm/client.go`) para instruir explicitamente o critério de conectividade dentro de `radius_meters`; testado de novo duas vezes contra o modelo real após reconstruir a imagem `api`: ambas as vezes produziram os mesmos dois grupos coerentes (pares de ordens mutuamente próximas), deixando pendente somente a ordem sem posição — resultado consistente, registrado em `grouping_suggestions` com `prompt_version = 'v2'`.
 
-Não foi executado teste contra o MK real nem mutação externa, nem qualquer chamada real ao Cloudflare Workers AI (as credenciais usadas nos testes e no smoke test acima são fictícias e nunca chegam a sair da rede de teste).
+Não foi executado teste contra o MK real nem mutação externa. A chamada real ao Cloudflare Workers AI foi executada nesta revisão (ver acima) com a conta Cloudflare do usuário; nenhuma chamada ao MK ocorreu.
 
 ## Ponto exato de parada
 
 - O fluxo local simulado cobre sincronização, listagem, localização manual, agrupamento determinístico, edição, fixação, atualização, aprovação e prévia de agendamento.
-- Criar e recalcular uma proposta agora pedem uma sugestão ao Workers AI configurado e a aplicam se ela validar; sem configuração (padrão) ou em qualquer falha, o agrupamento determinístico já calculado é o que fica. Nenhum modelo Cloudflare real foi escolhido ou testado — a fronteira está pronta, mas ainda não foi exercitada contra a API real.
+- Criar e recalcular uma proposta agora pedem uma sugestão ao Workers AI configurado e a aplicam se ela validar; sem configuração (padrão) ou em qualquer falha, o agrupamento determinístico já calculado é o que fica. O modelo `@cf/meta/llama-3.3-70b-instruct-fp8-fast` foi habilitado com credenciais reais e testado de ponta a ponta pela primeira vez; ainda não é uma escolha final de produção nem foi testado com cadeias maiores que pares de ordens.
 - A prévia de agendamento é somente leitura. Solicitações e envios não são criados enquanto a convenção diária de início/fim e o contrato real do MK não forem confirmados.
 - O modo real permanece bloqueado pelos contratos externos listados neste documento; não existe fallback automático para dados simulados.
 - Os testes PostgreSQL de concorrência de tarefas (reserva, lease, tentativas, atraso), de sincronização repetida/parcial e de sugestão de agrupamento (aplicação, descarte por invalidez, respeito a grupos fixados, corrida com edição concorrente) já existem e passam contra PostgreSQL/PostGIS real.
 
 ## Próximo marco recomendado
 
-Escolher e testar um modelo real do Workers AI (a documentação da Cloudflare deve ser conferida antes de presumir que o JSON Schema é sempre respeitado) e então habilitar `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_AI_MODEL` em um ambiente real para observar o comportamento de ponta a ponta pela primeira vez — até agora só um cliente substituto (dublê) foi exercitado. Em paralelo, decidir se o painel deve poder pedir uma nova sugestão sob demanda e avaliar se o laço do processo `worker` (não só a fila e a sincronização simulada isoladamente) merece um teste de retomada após reinício simulado. O envio real continua condicionado à definição dos horários diários e à confirmação dos contratos MK.
+Testar o prompt `v2` com cenários de 3+ ordens mutuamente conectadas dentro do raio, para confirmar se o modelo prefere um grupo maior a vários pares menores (só foi observado agrupar pares até agora). Em paralelo, decidir se `@cf/meta/llama-3.3-70b-instruct-fp8-fast` é a escolha definitiva de produção ou se vale comparar custo/qualidade com os outros modelos da lista de JSON Mode, e se o painel deve poder pedir uma nova sugestão sob demanda. Avaliar também se o laço do processo `worker` (não só a fila e a sincronização simulada isoladamente) merece um teste de retomada após reinício simulado. O envio real continua condicionado à definição dos horários diários e à confirmação dos contratos MK.
