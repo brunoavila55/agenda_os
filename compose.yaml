@@ -1,0 +1,80 @@
+name: agenda-os
+
+services:
+  db:
+    image: postgis/postgis:17-3.5-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agenda_os}
+      POSTGRES_USER: ${POSTGRES_USER:-agenda_os}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agenda_os} -d ${POSTGRES_DB:-agenda_os}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["/app/api"]
+    environment:
+      APP_MODE: ${APP_MODE:-simulation}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Sao_Paulo}
+      APP_API_TOKEN: ${APP_API_TOKEN:?defina APP_API_TOKEN no .env}
+      DATABASE_URL: ${DATABASE_URL:?defina DATABASE_URL no .env}
+      API_ADDR: :8080
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck", "http://127.0.0.1:8080/health/live"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["/app/worker"]
+    environment:
+      APP_MODE: ${APP_MODE:-simulation}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Sao_Paulo}
+      DATABASE_URL: ${DATABASE_URL:?defina DATABASE_URL no .env}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-10m}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-3s}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?defina APP_PASSWORD no .env}
+      SESSION_SECRET: ${SESSION_SECRET:?defina SESSION_SECRET no .env}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      APP_API_TOKEN: ${APP_API_TOKEN:?defina APP_API_TOKEN no .env}
+      API_INTERNAL_URL: http://api:8080
+      NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Agenda O.S.}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/login"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
