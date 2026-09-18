@@ -36,10 +36,14 @@ func main() {
 
 	hostname, _ := os.Hostname()
 	workerID := fmt.Sprintf("%s-%d", hostname, os.Getpid())
-	logger.Info("worker iniciado", "worker_id", workerID, "mode", cfg.Mode, "sync_interval", cfg.SyncInterval)
+	schedulerInterval := cfg.SyncInterval
+	if schedulerInterval > time.Minute {
+		schedulerInterval = time.Minute
+	}
+	logger.Info("worker iniciado", "worker_id", workerID, "mode", cfg.Mode, "scheduler_interval", schedulerInterval)
 
 	scheduleAll(ctx, dataStore, logger)
-	syncTicker := time.NewTicker(cfg.SyncInterval)
+	syncTicker := time.NewTicker(schedulerInterval)
 	pollTicker := time.NewTicker(cfg.WorkerPollInterval)
 	defer syncTicker.Stop()
 	defer pollTicker.Stop()
@@ -66,7 +70,7 @@ func scheduleAll(ctx context.Context, dataStore *store.Store, logger *slog.Logge
 		if !operation.Enabled {
 			continue
 		}
-		_, created, err := dataStore.EnqueueSync(ctx, operation.ID, "automatic")
+		created, err := dataStore.EnqueueDueSync(ctx, operation, "simulation")
 		if err != nil {
 			logger.Error("enfileirar sincronização", "operation_id", operation.ID, "error", err)
 			continue

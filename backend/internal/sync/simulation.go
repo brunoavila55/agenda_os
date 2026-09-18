@@ -39,7 +39,7 @@ type payload struct {
 	Trigger string `json:"trigger"`
 }
 
-func RunSimulation(ctx context.Context, dataStore *store.Store, job *store.Job) error {
+func RunSimulation(ctx context.Context, dataStore *store.Store, job *store.Job) (runErr error) {
 	var input payload
 	if err := json.Unmarshal(job.Payload, &input); err != nil {
 		return fmt.Errorf("payload inválido: %w", err)
@@ -48,18 +48,25 @@ func RunSimulation(ctx context.Context, dataStore *store.Store, job *store.Job) 
 		input.Trigger = "automatic"
 	}
 
+	var runID string
+	err := dataStore.Pool.QueryRow(ctx, `INSERT INTO sync_runs (operation_id, source, trigger, status, started_at)
+		VALUES ($1, 'simulation', $2, 'running', now()) RETURNING id`, job.OperationID, input.Trigger).Scan(&runID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if runErr != nil {
+			failureCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = dataStore.RecordSyncFailure(failureCtx, runID, "simulation", runErr.Error())
+		}
+	}()
+
 	tx, err := dataStore.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-
-	var runID string
-	err = tx.QueryRow(ctx, `INSERT INTO sync_runs (operation_id, source, trigger, status, started_at)
-		VALUES ($1, 'simulation', $2, 'running', now()) RETURNING id`, job.OperationID, input.Trigger).Scan(&runID)
-	if err != nil {
-		return err
-	}
 
 	for _, item := range fixtures {
 		var typeID string
@@ -104,13 +111,28 @@ func RunSimulation(ctx context.Context, dataStore *store.Store, job *store.Job) 
 		if item.Latitude == nil || item.Longitude == nil {
 			_, err = tx.Exec(ctx, `INSERT INTO order_locations (order_id, position, source, confidence, address_fingerprint, observed_at)
 				VALUES ($1,NULL,'unresolved',NULL,$2,now()) ON CONFLICT (order_id) DO UPDATE SET
-				position=NULL, source='unresolved', confidence=NULL, address_fingerprint=$2, observed_at=now()
-				WHERE NOT order_locations.reviewed_manually`, orderID, fingerprint)
+				position=CASE WHEN order_locations.reviewed_manually THEN order_locations.position ELSE EXCLUDED.position END,
+				source=CASE WHEN order_locations.reviewed_manually THEN order_locations.source ELSE EXCLUDED.source END,
+				confidence=CASE WHEN order_locations.reviewed_manually THEN order_locations.confidence ELSE EXCLUDED.confidence END,
+				address_changed=CASE WHEN order_locations.reviewed_manually
+					THEN order_locations.address_changed OR order_locations.address_fingerprint IS DISTINCT FROM EXCLUDED.address_fingerprint
+					ELSE false END,
+				location_version=order_locations.location_version + CASE WHEN order_locations.address_fingerprint IS DISTINCT FROM EXCLUDED.address_fingerprint
+					OR (NOT order_locations.reviewed_manually AND (order_locations.position,order_locations.source) IS DISTINCT FROM (EXCLUDED.position,EXCLUDED.source)) THEN 1 ELSE 0 END,
+				address_fingerprint=EXCLUDED.address_fingerprint, observed_at=now(), updated_at=now()`, orderID, fingerprint)
 		} else {
 			_, err = tx.Exec(ctx, `INSERT INTO order_locations (order_id, position, source, confidence, address_fingerprint, observed_at)
 				VALUES ($1,ST_SetSRID(ST_MakePoint($2,$3),4326)::geography,'fixture',1,$4,now())
-				ON CONFLICT (order_id) DO UPDATE SET position=EXCLUDED.position, source='fixture', confidence=1,
-				address_fingerprint=$4, observed_at=now() WHERE NOT order_locations.reviewed_manually`,
+				ON CONFLICT (order_id) DO UPDATE SET
+				position=CASE WHEN order_locations.reviewed_manually THEN order_locations.position ELSE EXCLUDED.position END,
+				source=CASE WHEN order_locations.reviewed_manually THEN order_locations.source ELSE EXCLUDED.source END,
+				confidence=CASE WHEN order_locations.reviewed_manually THEN order_locations.confidence ELSE EXCLUDED.confidence END,
+				address_changed=CASE WHEN order_locations.reviewed_manually
+					THEN order_locations.address_changed OR order_locations.address_fingerprint IS DISTINCT FROM EXCLUDED.address_fingerprint
+					ELSE false END,
+				location_version=order_locations.location_version + CASE WHEN order_locations.address_fingerprint IS DISTINCT FROM EXCLUDED.address_fingerprint
+					OR (NOT order_locations.reviewed_manually AND (order_locations.position,order_locations.source) IS DISTINCT FROM (EXCLUDED.position,EXCLUDED.source)) THEN 1 ELSE 0 END,
+				address_fingerprint=EXCLUDED.address_fingerprint, observed_at=now(), updated_at=now()`,
 				orderID, *item.Longitude, *item.Latitude, fingerprint)
 		}
 		if err != nil {

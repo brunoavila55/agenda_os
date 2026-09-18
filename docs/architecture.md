@@ -11,3 +11,12 @@ O banco separa:
 
 Jobs são reservados com `FOR UPDATE SKIP LOCKED`; a transação termina antes do processamento. Um lease expirado pode ser recuperado. Mutações externas futuras deverão reconciliar antes de qualquer repetição.
 
+O planejamento determinístico usa `ST_DWithin` sobre `geography`, portanto o raio configurado é interpretado em metros. O backend transforma os pares próximos em componentes conexos; ordens sem posição ficam em pendência explícita. Edições usam a versão da proposta como controle otimista e a aprovação revalida versão observada, situação aberta e ausência de agendamento.
+
+O recálculo preserva os integrantes ainda elegíveis de grupos marcados como fixos e recompõe apenas o restante. Localizações possuem versão independente da observação da ordem. Uma correção manual é preservada durante sincronizações; mudança posterior do endereço mantém a posição, mas a marca para revisão e impede aprovação silenciosa.
+
+A prévia de agendamento é somente leitura. Ela revalida estado, versões e localização por ordem, apresenta equipe e agenda responsável e mantém a criação de comandos bloqueada enquanto não houver convenção de horários e contrato MK confirmado.
+
+A fronteira de Workers AI usa o endpoint REST oficial e solicita saída por JSON Schema. O validador local exige cobertura exata dos IDs, rejeita duplicações e invenções, impede agrupar ordens sem posição e verifica conectividade usando somente as distâncias calculadas pelo sistema. Prompt completo e dados pessoais não são persistidos; a tabela de sugestões guarda modelo, versão do prompt, assinatura da entrada e resultado validado ou erro sanitizado.
+
+O serviço `migrate` aplica arquivos SQL numerados antes da API e do worker. Cada migração é registrada com checksum e executada em transação sob trava consultiva. Os dois primeiros esquemas, originalmente aplicados apenas no bootstrap do PostgreSQL, são reconhecidos para adoção segura por volumes existentes.

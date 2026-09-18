@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,11 +30,19 @@ func New(dataStore *store.Store, mode, apiToken string, logger *slog.Logger) htt
 	mux.HandleFunc("GET /health/ready", server.ready)
 	mux.Handle("GET /api/v1/dashboard", server.auth(http.HandlerFunc(server.dashboard)))
 	mux.Handle("GET /api/v1/orders", server.auth(http.HandlerFunc(server.orders)))
+	mux.Handle("PUT /api/v1/orders/{id}/location", server.auth(http.HandlerFunc(server.setOrderLocation)))
 	mux.Handle("GET /api/v1/operations", server.auth(http.HandlerFunc(server.operations)))
 	mux.Handle("GET /api/v1/service-types", server.auth(http.HandlerFunc(server.serviceTypes)))
+	mux.Handle("GET /api/v1/teams", server.auth(http.HandlerFunc(server.teams)))
 	mux.Handle("PUT /api/v1/operations/{id}/service-types", server.auth(http.HandlerFunc(server.setServiceTypes)))
 	mux.Handle("POST /api/v1/sync-runs", server.auth(http.HandlerFunc(server.enqueueSync)))
 	mux.Handle("GET /api/v1/sync-runs/latest", server.auth(http.HandlerFunc(server.latestSync)))
+	mux.Handle("GET /api/v1/planning-proposals", server.auth(http.HandlerFunc(server.proposalForDate)))
+	mux.Handle("POST /api/v1/planning-proposals", server.auth(http.HandlerFunc(server.createProposal)))
+	mux.Handle("PUT /api/v1/planning-proposals/{id}", server.auth(http.HandlerFunc(server.updateProposal)))
+	mux.Handle("POST /api/v1/planning-proposals/{id}/refresh", server.auth(http.HandlerFunc(server.refreshProposal)))
+	mux.Handle("POST /api/v1/planning-proposals/{id}/approve", server.auth(http.HandlerFunc(server.approveProposal)))
+	mux.Handle("GET /api/v1/planning-proposals/{id}/scheduling-preview", server.auth(http.HandlerFunc(server.schedulingPreview)))
 	return server.logging(mux)
 }
 
@@ -86,12 +96,69 @@ func (s *Server) orders(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_status", "Filtro de situação inválido.")
 		return
 	}
-	items, err := s.store.Orders(r.Context(), status, r.URL.Query().Get("operation_id"))
+	page, err := positiveQueryInt(r, "page", 1, 1000000)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_page", "page deve ser um inteiro positivo.")
+		return
+	}
+	pageSize, err := positiveQueryInt(r, "page_size", 100, 200)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_page_size", "page_size deve ser um inteiro entre 1 e 200.")
+		return
+	}
+	items, total, err := s.store.Orders(r.Context(), status, r.URL.Query().Get("operation_id"), s.mode,
+		strings.TrimSpace(r.URL.Query().Get("q")), page, pageSize)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "page": page, "page_size": pageSize, "total": total})
+}
+
+func positiveQueryInt(r *http.Request, name string, fallback, maximum int) (int, error) {
+	value := r.URL.Query().Get(name)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > maximum {
+		return 0, errors.New("inteiro fora do intervalo")
+	}
+	return parsed, nil
+}
+
+func (s *Server) setOrderLocation(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Latitude                *float64 `json:"latitude"`
+		Longitude               *float64 `json:"longitude"`
+		ExpectedOrderVersion    int64    `json:"expected_order_version"`
+		ExpectedLocationVersion int64    `json:"expected_location_version"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.Latitude == nil || input.Longitude == nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Latitude, longitude e versões são obrigatórias.")
+		return
+	}
+	if input.ExpectedOrderVersion < 1 || input.ExpectedLocationVersion < 0 ||
+		math.IsNaN(*input.Latitude) || math.IsInf(*input.Latitude, 0) || *input.Latitude < -90 || *input.Latitude > 90 ||
+		math.IsNaN(*input.Longitude) || math.IsInf(*input.Longitude, 0) || *input.Longitude < -180 || *input.Longitude > 180 {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_location", "Coordenadas ou versões inválidas.")
+		return
+	}
+	order, err := s.store.SetManualLocation(r.Context(), r.PathValue("id"), s.mode, *input.Latitude, *input.Longitude,
+		input.ExpectedOrderVersion, input.ExpectedLocationVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Ordem não encontrada.")
+		return
+	}
+	if errors.Is(err, store.ErrLocationConflict) {
+		writeError(w, http.StatusConflict, "location_conflict", "A ordem ou localização mudou. Atualize os dados antes de salvar.")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
 }
 
 func (s *Server) operations(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +171,16 @@ func (s *Server) operations(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serviceTypes(w http.ResponseWriter, r *http.Request) {
-	items, err := s.store.ServiceTypes(r.Context())
+	items, err := s.store.ServiceTypes(r.Context(), s.mode)
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) teams(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.Teams(r.Context(), s.mode)
 	if err != nil {
 		s.internalError(w, err)
 		return
@@ -120,7 +196,7 @@ func (s *Server) setServiceTypes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", "Corpo JSON inválido.")
 		return
 	}
-	if err := s.store.SetOperationServiceTypes(r.Context(), r.PathValue("id"), input.ServiceTypeIDs); err != nil {
+	if err := s.store.SetOperationServiceTypes(r.Context(), r.PathValue("id"), s.mode, input.ServiceTypeIDs); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "not_found", "Operação não encontrada.")
 			return
@@ -156,12 +232,184 @@ func (s *Server) enqueueSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) latestSync(w http.ResponseWriter, r *http.Request) {
-	run, err := s.store.LatestSyncRun(r.Context())
+	run, err := s.store.LatestSyncRun(r.Context(), s.mode)
 	if err != nil {
 		s.internalError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
+}
+
+func parseOperationalDate(value string) (time.Time, error) {
+	if len(value) != len("2006-01-02") {
+		return time.Time{}, errors.New("data inválida")
+	}
+	date, err := time.Parse("2006-01-02", value)
+	if err != nil || date.Format("2006-01-02") != value {
+		return time.Time{}, errors.New("data inválida")
+	}
+	return date, nil
+}
+
+func (s *Server) proposalForDate(w http.ResponseWriter, r *http.Request) {
+	operationID := r.URL.Query().Get("operation_id")
+	date := r.URL.Query().Get("date")
+	if operationID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "operation_id é obrigatório.")
+		return
+	}
+	if _, err := parseOperationalDate(date); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_date", "date deve usar o formato AAAA-MM-DD.")
+		return
+	}
+	proposal, err := s.store.ProposalForDate(r.Context(), operationID, date, s.mode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusOK, nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) createProposal(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		OperationID     string `json:"operation_id"`
+		OperationalDate string `json:"operational_date"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.OperationID == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "operation_id e operational_date são obrigatórios.")
+		return
+	}
+	date, err := parseOperationalDate(input.OperationalDate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_date", "operational_date deve usar o formato AAAA-MM-DD.")
+		return
+	}
+	proposal, created, err := s.store.CreateProposal(r.Context(), input.OperationID, date, s.mode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Operação ativa não encontrada.")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, proposal)
+}
+
+type proposalUpdateInput struct {
+	Version             int     `json:"version"`
+	TeamID              *string `json:"team_id"`
+	AgendaResponsibleID *string `json:"agenda_responsible_id"`
+	Groups              []struct {
+		Name     string   `json:"name"`
+		IsFixed  bool     `json:"is_fixed"`
+		OrderIDs []string `json:"order_ids"`
+	} `json:"groups"`
+	PendingOrderIDs []string `json:"pending_order_ids"`
+}
+
+func (s *Server) updateProposal(w http.ResponseWriter, r *http.Request) {
+	var input proposalUpdateInput
+	if err := decodeJSON(r, &input); err != nil || input.Version < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Versão e composição da proposta são obrigatórias.")
+		return
+	}
+	groups := make([]store.ProposalGroupInput, len(input.Groups))
+	for index, group := range input.Groups {
+		groups[index] = store.ProposalGroupInput{Name: strings.TrimSpace(group.Name), IsFixed: group.IsFixed, OrderIDs: group.OrderIDs}
+	}
+	proposal, err := s.store.UpdateProposal(r.Context(), r.PathValue("id"), s.mode, input.Version,
+		input.TeamID, input.AgendaResponsibleID, groups, input.PendingOrderIDs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Proposta não encontrada.")
+		return
+	}
+	if errors.Is(err, store.ErrProposalConflict) {
+		writeError(w, http.StatusConflict, "proposal_conflict", "A proposta foi alterada ou não está mais em edição. Atualize os dados.")
+		return
+	}
+	if errors.Is(err, store.ErrInvalidProposal) {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_proposal", err.Error())
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) refreshProposal(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Version int `json:"version"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.Version < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "version é obrigatória.")
+		return
+	}
+	proposal, err := s.store.RefreshProposal(r.Context(), r.PathValue("id"), s.mode, input.Version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Proposta não encontrada.")
+		return
+	}
+	if errors.Is(err, store.ErrProposalConflict) {
+		writeError(w, http.StatusConflict, "proposal_conflict", "A proposta mudou ou não pode ser recalculada. Atualize os dados.")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) approveProposal(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Version int `json:"version"`
+	}
+	if err := decodeJSON(r, &input); err != nil || input.Version < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "version é obrigatória.")
+		return
+	}
+	proposal, err := s.store.ApproveProposal(r.Context(), r.PathValue("id"), s.mode, input.Version)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Proposta não encontrada.")
+		return
+	}
+	if errors.Is(err, store.ErrProposalConflict) {
+		writeError(w, http.StatusConflict, "proposal_conflict", "A proposta ou uma de suas ordens mudou. Revise antes de aprovar.")
+		return
+	}
+	if errors.Is(err, store.ErrInvalidProposal) {
+		writeError(w, http.StatusUnprocessableEntity, "invalid_proposal", err.Error())
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, proposal)
+}
+
+func (s *Server) schedulingPreview(w http.ResponseWriter, r *http.Request) {
+	preview, err := s.store.SchedulingPreview(r.Context(), r.PathValue("id"), s.mode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "Proposta não encontrada.")
+		return
+	}
+	if err != nil {
+		s.internalError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
 }
 
 func (s *Server) internalError(w http.ResponseWriter, err error) {
@@ -172,7 +420,13 @@ func (s *Server) internalError(w http.ResponseWriter, err error) {
 func decodeJSON(r *http.Request, target any) error {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(target)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("corpo deve conter exatamente um documento JSON")
+	}
+	return nil
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

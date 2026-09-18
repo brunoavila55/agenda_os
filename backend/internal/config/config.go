@@ -8,13 +8,16 @@ import (
 )
 
 type Config struct {
-	Mode               string
-	Timezone           *time.Location
-	DatabaseURL        string
-	APIAddr            string
-	APIToken           string
-	SyncInterval       time.Duration
-	WorkerPollInterval time.Duration
+	Mode                string
+	Timezone            *time.Location
+	DatabaseURL         string
+	APIAddr             string
+	APIToken            string
+	SyncInterval        time.Duration
+	WorkerPollInterval  time.Duration
+	CloudflareAccountID string
+	CloudflareAPIToken  string
+	CloudflareAIModel   string
 }
 
 func Load() (Config, error) {
@@ -34,13 +37,16 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Mode:               getenv("APP_MODE", "simulation"),
-		Timezone:           location,
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		APIAddr:            getenv("API_ADDR", ":8080"),
-		APIToken:           os.Getenv("APP_API_TOKEN"),
-		SyncInterval:       syncInterval,
-		WorkerPollInterval: pollInterval,
+		Mode:                getenv("APP_MODE", "simulation"),
+		Timezone:            location,
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		APIAddr:             getenv("API_ADDR", ":8080"),
+		APIToken:            os.Getenv("APP_API_TOKEN"),
+		SyncInterval:        syncInterval,
+		WorkerPollInterval:  pollInterval,
+		CloudflareAccountID: os.Getenv("CLOUDFLARE_ACCOUNT_ID"),
+		CloudflareAPIToken:  os.Getenv("CLOUDFLARE_API_TOKEN"),
+		CloudflareAIModel:   os.Getenv("CLOUDFLARE_AI_MODEL"),
 	}
 	if cfg.Mode != "simulation" && cfg.Mode != "real" {
 		return Config{}, errors.New("APP_MODE deve ser simulation ou real")
@@ -54,6 +60,15 @@ func Load() (Config, error) {
 func (c Config) ValidateAPI() error {
 	if len(c.APIToken) < 24 {
 		return errors.New("APP_API_TOKEN deve ter pelo menos 24 caracteres")
+	}
+	configuredAIFields := 0
+	for _, value := range []string{c.CloudflareAccountID, c.CloudflareAPIToken, c.CloudflareAIModel} {
+		if value != "" {
+			configuredAIFields++
+		}
+	}
+	if configuredAIFields != 0 && configuredAIFields != 3 {
+		return errors.New("Workers AI exige CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN e CLOUDFLARE_AI_MODEL em conjunto")
 	}
 	return nil
 }

@@ -19,7 +19,8 @@ services:
 
   api:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
       target: runtime
     command: ["/app/api"]
     environment:
@@ -28,9 +29,12 @@ services:
       APP_API_TOKEN: ${APP_API_TOKEN:?defina APP_API_TOKEN no .env}
       DATABASE_URL: ${DATABASE_URL:?defina DATABASE_URL no .env}
       API_ADDR: :8080
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_AI_MODEL: ${CLOUDFLARE_AI_MODEL:-}
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/app/healthcheck", "http://127.0.0.1:8080/health/live"]
       interval: 10s
@@ -40,7 +44,8 @@ services:
 
   worker:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
       target: runtime
     command: ["/app/worker"]
     environment:
@@ -50,9 +55,24 @@ services:
       SYNC_INTERVAL: ${SYNC_INTERVAL:-10m}
       WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-3s}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    command: ["/app/migrate"]
+    environment:
+      APP_MODE: ${APP_MODE:-simulation}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Sao_Paulo}
+      DATABASE_URL: ${DATABASE_URL:?defina DATABASE_URL no .env}
+    depends_on:
       db:
         condition: service_healthy
-    restart: unless-stopped
+    restart: "no"
 
   frontend:
     build:
