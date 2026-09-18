@@ -13,8 +13,8 @@
 
 ## Bloqueios para o modo real
 
-1. ~~código exato dos tipos rurais escolhidos~~ → catálogo completo importado (`migrations/007_real_service_types.sql`); usuário confirmou `29`, `30` e `249` como candidatos relevantes para rural (ver acima); atribuição final à operação via API ainda não feita;
-2. endpoint e resposta anonimizados da listagem de **O.S.** por tipo/situação (diferente do catálogo de tipos, que já está confirmado) — continua sem contrato conhecido, é o maior bloqueador da sincronização real;
+1. ~~código exato dos tipos rurais escolhidos~~ → catálogo completo importado (`migrations/007_real_service_types.sql`); usuário confirmou `29`, `30` e `249`, e eles já estão atribuídos à operação `rural` via `PUT /api/v1/operations/{id}/service-types` (testado em 2026-09-18 com `APP_MODE=real` temporário só na API, sem worker);
+2. endpoint e resposta anonimizados da listagem de **O.S.** por tipo/situação (diferente do catálogo de tipos, que já está confirmado) — continua sem contrato conhecido, é o maior bloqueador da sincronização real. **Confirmado em 2026-09-18: não há mais documentação a consultar.** As duas páginas do Confluence (`APIs gerais`, `APIs especiais`) são citadas pelo usuário como a única documentação existente, e ambas foram checadas duas vezes com perguntas específicas: `APIs gerais` só cobre configuração do Webservice Manager (perfis, tokens, IP), sem nenhum endpoint `.rule`; `APIs especiais` diz literalmente *"Lista de webservices aprimorados. Para adquirir ou obter mais informações entre em contato com a nossa equipe comercial"* — os endpoints além do catálogo básico são propositalmente não publicados pela MK, exigem contato comercial. Não repetir essa busca em sessões futuras esperando um resultado diferente;
 3. base e habilitação da API Node;
 4. retorno completo anonimizado de uma O.S. e códigos de situação/agendamento;
 5. vínculo inequívoco com conexão/coordenadas, se existir;
